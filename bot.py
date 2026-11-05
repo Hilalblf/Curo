@@ -1,32 +1,23 @@
 
 import os
 import asyncio
-import logging
 import random
-
+import logging
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 import requests
-
 from telegram import Update
-from telegram.error import (
-    Conflict,
-    NetworkError,
-    TimedOut,
-    RetryAfter,
-)
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
 )
 
-
-# ============================================================
-# CONFIG — LEX FX BOT V5
-# ============================================================
+# ==========================================
+# LEX RATE BOT - V6
+# ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
@@ -34,715 +25,420 @@ TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 
 TIMEZONE = ZoneInfo("Africa/Algiers")
 
-# التاريخ المتوقع لبداية رمضان 2027
-RAMADAN_DATE = os.getenv(
-    "RAMADAN_DATE",
-    "2027-02-08"
-)
+# تاريخ رمضان المتوقع، يمكن تغييره من Railway Variables
+RAMADAN_DATE = os.getenv("RAMADAN_DATE", "2027-02-08")
 
-UPDATE_INTERVAL = 3 * 60 * 60
-FIRST_UPDATE = 10
-
+# أقصى فرق مسموح بين المصدرين: 0.50%
 MAX_SOURCE_DIFFERENCE = Decimal("0.005")
 
-
-# ============================================================
-# LOGGING
-# ============================================================
+UPDATE_INTERVAL = 3 * 60 * 60
 
 logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
 logger = logging.getLogger("LEX")
 
-
-# ============================================================
-# HTTP SESSION
-# ============================================================
-
-session = requests.Session()
-
-session.headers.update({
-    "User-Agent": "LEX-FX-Bot/5.0",
-    "Accept": "application/json",
-})
-
-
-# ============================================================
-# ADHKAR DATABASE
-# ============================================================
-
-ADHKAR = [
-
-    "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ، سُبْحَانَ اللَّهِ الْعَظِيمِ.",
-
-    "أَسْتَغْفِرُ اللَّهَ وَأَتُوبُ إِلَيْهِ.",
-
-    "لَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ.",
-
-    "اللَّهُمَّ صَلِّ وَسَلِّمْ عَلَى نَبِيِّنَا مُحَمَّدٍ ﷺ.",
-
-    "سُبْحَانَ اللَّهِ، وَالْحَمْدُ لِلَّهِ، وَلَا إِلَهَ إِلَّا اللَّهُ، وَاللَّهُ أَكْبَرُ.",
-
-    "رَضِيتُ بِاللَّهِ رَبًّا، وَبِالْإِسْلَامِ دِينًا، وَبِمُحَمَّدٍ ﷺ نَبِيًّا.",
-
-    "اللَّهُمَّ اغْفِرْ لِي وَارْحَمْنِي وَاهْدِنِي.",
-
-    "الْحَمْدُ لِلَّهِ عَلَى كُلِّ حَالٍ.",
-
-    "لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ.",
-
-    "اللَّهُمَّ إِنَّكَ عَفُوٌّ تُحِبُّ الْعَفْوَ فَاعْفُ عَنِّي.",
-
-    "رَبِّ اغْفِرْ لِي وَلِوَالِدَيَّ وَلِلْمُؤْمِنِينَ.",
-
-    "اللَّهُمَّ ارْزُقْنَا حُسْنَ الْخَاتِمَةِ.",
-
-    "يَا رَبِّ، لَكَ الْحَمْدُ كَمَا يَنْبَغِي لِجَلَالِ وَجْهِكَ وَعَظِيمِ سُلْطَانِكَ.",
-
-    "اللَّهُمَّ اهْدِنَا وَاهْدِ بِنَا وَاجْعَلْنَا سَبَبًا لِمَنِ اهْتَدَى.",
-
-    "رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ.",
-
-    "اللَّهُمَّ أَصْلِحْ لَنَا دِينَنَا وَدُنْيَانَا وَآخِرَتَنَا.",
-
-    "اللَّهُمَّ إِنِّي أَسْأَلُكَ الْعَفْوَ وَالْعَافِيَةَ.",
-
-    "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ.",
-
-    "اللَّهُمَّ اجْعَلْنَا مِنَ الشَّاكِرِينَ وَالصَّابِرِينَ.",
-
-    "رَبِّ زِدْنِي عِلْمًا.",
-
-    "اللَّهُمَّ بَارِكْ لَنَا فِي أَرْزَاقِنَا وَأَعْمَارِنَا.",
-
-    "أَسْتَغْفِرُ اللَّهَ الْعَظِيمَ الَّذِي لَا إِلَهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ وَأَتُوبُ إِلَيْهِ.",
-
-    "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ.",
-
-    "اللَّهُمَّ اجْعَلْنَا مِنْ أَهْلِ الْجَنَّةِ.",
-
-    "يَا مُقَلِّبَ الْقُلُوبِ ثَبِّتْ قَلْبِي عَلَى دِينِكَ.",
-
-    "اللَّهُمَّ أَعِنَّا عَلَى ذِكْرِكَ وَشُكْرِكَ وَحُسْنِ عِبَادَتِكَ.",
-
-    "رَبَّنَا لَا تُزِغْ قُلُوبَنَا بَعْدَ إِذْ هَدَيْتَنَا.",
-
-    "اللَّهُمَّ ارْحَمْ وَالِدَيْنَا وَاغْفِرْ لَهُمَا.",
-
-    "الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ.",
-
-    "اللَّهُمَّ فَرِّجْ هُمُومَنَا وَيَسِّرْ أُمُورَنَا."
-]
-
-
-# منع تكرار الذكر السابق
 last_dhikr = None
 
 
-def get_daily_dhikr():
+# ==========================================
+# الأذكار
+# ==========================================
 
+ADHKAR = [
+    "سبحان الله وبحمده، سبحان الله العظيم",
+    "أستغفر الله وأتوب إليه",
+    "لا إله إلا الله وحده لا شريك له، له الملك وله الحمد وهو على كل شيء قدير",
+    "سبحان الله والحمد لله ولا إله إلا الله والله أكبر",
+    "اللهم صل وسلم على نبينا محمد",
+    "لا حول ولا قوة إلا بالله",
+    "حسبي الله لا إله إلا هو عليه توكلت وهو رب العرش العظيم",
+    "اللهم اغفر لي ولوالدي وللمؤمنين والمؤمنات",
+    "رب اغفر لي وتب علي إنك أنت التواب الرحيم",
+    "سبحان الله وبحمده عدد خلقه ورضا نفسه وزنة عرشه ومداد كلماته",
+    "اللهم إنك عفو تحب العفو فاعف عني",
+    "يا حي يا قيوم برحمتك أستغيث",
+    "اللهم ارزقنا حسن الخاتمة",
+    "اللهم اجعل القرآن ربيع قلوبنا ونور صدورنا",
+    "ربنا آتنا في الدنيا حسنة وفي الآخرة حسنة وقنا عذاب النار",
+    "اللهم إني أسألك العفو والعافية في الدنيا والآخرة",
+    "اللهم ثبت قلوبنا على دينك",
+    "اللهم ارزقنا رزقاً حلالاً طيباً مباركاً فيه",
+    "اللهم اهدنا واهد بنا واجعلنا سبباً لمن اهتدى",
+    "اللهم أعنا على ذكرك وشكرك وحسن عبادتك",
+    "رضيت بالله رباً وبالإسلام ديناً وبمحمد صلى الله عليه وسلم نبياً",
+    "اللهم إني أعوذ بك من الهم والحزن والعجز والكسل",
+    "اللهم اجعلنا من الذاكرين الشاكرين",
+    "أستغفر الله العظيم الذي لا إله إلا هو الحي القيوم وأتوب إليه",
+    "اللهم اغفر لنا وارحمنا وأنت خير الراحمين",
+    "سبحانك اللهم وبحمدك، أشهد أن لا إله إلا أنت، أستغفرك وأتوب إليك",
+    "اللهم ارزقنا قلوباً خاشعة وألسنة ذاكرة",
+    "اللهم بارك لنا في أوقاتنا وأعمالنا وأرزاقنا",
+    "اللهم إنا نسألك الجنة ونعوذ بك من النار",
+    "يا مقلب القلوب ثبت قلبي على دينك",
+]
+
+
+def get_daily_dhikr():
     global last_dhikr
 
-    choices = [
-        item for item in ADHKAR
-        if item != last_dhikr
-    ]
+    choices = [item for item in ADHKAR if item != last_dhikr]
 
     selected = random.choice(choices)
-
     last_dhikr = selected
 
     return selected
 
 
-# ============================================================
-# RAMADAN COUNTDOWN — ALGERIA
-# ============================================================
+# ==========================================
+# عداد رمضان
+# ==========================================
 
 def get_ramadan_countdown():
 
     today = datetime.now(TIMEZONE).date()
 
     try:
-
         ramadan = date.fromisoformat(RAMADAN_DATE)
-
     except ValueError:
-
-        logger.error("Invalid RAMADAN_DATE")
-
         ramadan = date(2027, 2, 8)
 
     remaining = (ramadan - today).days
 
-    if remaining > 1:
-
-        countdown = (
-            f"🌙 باقي تقريباً {remaining} يوماً "
-            "على رمضان بإذن الله."
-        )
-
-    elif remaining == 1:
-
-        countdown = (
-            "🌙 باقي تقريباً يوم واحد "
-            "على رمضان بإذن الله."
-        )
+    if remaining > 0:
+        return f"🌙 باقي على رمضان تقريبا {remaining} يوماً"
 
     elif remaining == 0:
-
-        countdown = (
-            "🌙 من المتوقع أن يكون اليوم بداية رمضان "
-            "بإذن الله."
-        )
+        return "🌙 رمضان اليوم بإذن الله"
 
     else:
-
-        countdown = (
-            "🌙 نسأل الله أن يتقبل منا ومنكم "
-            "صالح الأعمال."
-        )
-
-    return (
-        countdown
-        + "\n"
-        + "📌 التاريخ تقريبي ويخضع لرؤية الهلال والإعلان الرسمي."
-    )
+        return "🌙 نسأل الله أن يتقبل منا ومنكم صالح الأعمال."
 
 
-# ============================================================
-# VALIDATE RATE
-# ============================================================
+# ==========================================
+# المصدر الأول: Twelve Data
+# ==========================================
 
-def validate_rate(value):
+def get_twelve_data_rate():
 
-    try:
-
-        rate = Decimal(str(value))
-
-        if not rate.is_finite():
-            return None
-
-        if rate <= Decimal("0.50"):
-            return None
-
-        if rate >= Decimal("1.50"):
-            return None
-
-        return rate
-
-    except (
-        InvalidOperation,
-        TypeError,
-        ValueError,
-    ):
-
-        return None
-
-
-# ============================================================
-# SOURCE 1 — TWELVE DATA
-# ============================================================
-
-def get_twelve_data():
-
-    if not TWELVE_DATA_API_KEY:
-
-        raise RuntimeError(
-            "TWELVE_DATA_API_KEY missing"
-        )
-
-    url = "https://api.twelvedata.com/price"
+    url = "https://api.twelvedata.com/exchange_rate"
 
     params = {
         "symbol": "EUR/USD",
         "apikey": TWELVE_DATA_API_KEY,
     }
 
-    logger.info("1️⃣ Requesting Twelve Data...")
-
-    response = session.get(
+    response = requests.get(
         url,
         params=params,
-        timeout=(5, 15),
+        timeout=15,
     )
 
     response.raise_for_status()
 
     data = response.json()
 
-    if data.get("status") == "error":
+    if "rate" not in data:
+        raise ValueError(f"Twelve Data error: {data}")
 
-        raise RuntimeError(
-            data.get("message", "Twelve Data error")
-        )
+    eur_usd = Decimal(str(data["rate"]))
 
-    price = data.get("price")
+    if eur_usd <= 0:
+        raise ValueError("Invalid Twelve Data rate")
 
-    if price is None:
-
-        raise RuntimeError(
-            f"Twelve Data price missing: {data}"
-        )
-
-    eur_usd = validate_rate(price)
-
-    if eur_usd is None:
-
-        raise RuntimeError(
-            f"Invalid EUR/USD: {price}"
-        )
-
+    # تحويل EUR/USD إلى USD/EUR
     usd_eur = Decimal("1") / eur_usd
 
-    logger.info(
-        "✅ Twelve Data EUR/USD = %.8f",
-        eur_usd,
-    )
-
     return usd_eur
 
 
-# ============================================================
-# SOURCE 2 — EXCHANGERATE.DEV
-# ============================================================
+# ==========================================
+# المصدر الثاني: ExchangeRate-API
+# ==========================================
 
-def get_exchangerate_dev():
+def get_second_source_rate():
 
-    url = (
-        "https://api.exchangerate.dev/"
-        "v1/latest/USD"
-    )
+    url = "https://api.exchangerate-api.com/v4/latest/USD"
 
-    params = {
-        "symbols": "EUR",
-    }
-
-    logger.info("2️⃣ Requesting ExchangeRate.dev...")
-
-    response = session.get(
+    response = requests.get(
         url,
-        params=params,
-        timeout=(5, 15),
+        timeout=15,
     )
 
     response.raise_for_status()
 
     data = response.json()
 
-    if data.get("result") != "success":
+    eur_rate = data.get("rates", {}).get("EUR")
 
-        raise RuntimeError(
-            f"ExchangeRate.dev error: {data}"
-        )
+    if eur_rate is None:
+        raise ValueError("Second source returned no EUR rate")
 
-    rates = data.get("rates")
+    rate = Decimal(str(eur_rate))
 
-    if not isinstance(rates, dict):
+    if rate <= 0:
+        raise ValueError("Invalid second source rate")
 
-        raise RuntimeError(
-            "ExchangeRate.dev rates missing"
-        )
-
-    value = rates.get("EUR")
-
-    usd_eur = validate_rate(value)
-
-    if usd_eur is None:
-
-        raise RuntimeError(
-            f"Invalid ExchangeRate.dev USD/EUR: {value}"
-        )
-
-    logger.info(
-        "✅ ExchangeRate.dev USD/EUR = %.8f",
-        usd_eur,
-    )
-
-    return usd_eur
+    return rate
 
 
-# ============================================================
-# DOUBLE VERIFICATION
-# ============================================================
+# ==========================================
+# مقارنة المصدرين
+# ==========================================
 
-def get_verified_rate_sync():
+def fetch_rates_once():
 
-    twelve_rate = get_twelve_data()
+    rate_one = get_twelve_data_rate()
+    rate_two = get_second_source_rate()
 
-    second_rate = get_exchangerate_dev()
+    difference = abs(rate_one - rate_two)
 
-    difference = abs(
-        twelve_rate - second_rate
-    )
-
-    average = (
-        twelve_rate + second_rate
-    ) / Decimal("2")
+    average = (rate_one + rate_two) / Decimal("2")
 
     relative_difference = difference / average
 
     logger.info(
-        "📊 Twelve Data = %.8f",
-        twelve_rate,
-    )
-
-    logger.info(
-        "📊 ExchangeRate.dev = %.8f",
-        second_rate,
-    )
-
-    logger.info(
-        "📊 Difference = %.4f%%",
-        relative_difference * 100,
+        "Source 1: %s | Source 2: %s | Difference: %s",
+        rate_one,
+        rate_two,
+        relative_difference,
     )
 
     if relative_difference > MAX_SOURCE_DIFFERENCE:
-
-        raise RuntimeError(
-            "Sources disagree too much: "
-            f"{relative_difference * 100:.4f}%"
+        raise ValueError(
+            "Source difference is too high. "
+            "Publishing cancelled."
         )
 
+    # متوسط المصدرين
     usd_eur = average
 
+    # السعر العكسي
     eur_usd = Decimal("1") / usd_eur
-
-    logger.info(
-        "🎯 VERIFIED USD/EUR = %.8f",
-        usd_eur,
-    )
 
     return usd_eur, eur_usd
 
 
-# ============================================================
-# ASYNC RATE + RETRY
-# ============================================================
+# ==========================================
+# إعادة المحاولة
+# ==========================================
 
-async def get_verified_rate():
+async def get_rates():
 
     delays = [2, 5, 10]
 
-    for attempt in range(1, 4):
+    for attempt, delay in enumerate(delays, start=1):
 
         try:
+            return await asyncio.to_thread(fetch_rates_once)
 
-            logger.info(
-                "💱 Rate verification %s/3",
+        except Exception as error:
+
+            logger.error(
+                "Rate attempt %s failed: %s",
                 attempt,
+                error,
             )
 
-            return await asyncio.to_thread(
-                get_verified_rate_sync
-            )
+            if attempt < len(delays):
+                await asyncio.sleep(delay)
 
-        except Exception as e:
-
-            logger.warning(
-                "Rate verification failed %s/3: %s",
-                attempt,
-                e,
-            )
-
-            if attempt < 3:
-
-                await asyncio.sleep(
-                    delays[attempt - 1]
-                )
-
-    raise RuntimeError(
-        "Could not verify FX rate"
-    )
+    raise RuntimeError("All rate attempts failed")
 
 
-# ============================================================
-# MESSAGE
-# ============================================================
+# ==========================================
+# إنشاء الرسالة
+# ==========================================
 
-def make_message(usd_eur, eur_usd):
+async def make_message():
 
-    countdown = get_ramadan_countdown()
+    usd_eur, eur_usd = await get_rates()
 
     dhikr = get_daily_dhikr()
 
-    return (
+    now = datetime.now(TIMEZONE)
+
+    message = (
+        "💱 LEX EXCHANGE RATES\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+
         f"🇺🇸 1 USD = {usd_eur:.3f} EUR\n"
-        f"🇪🇺 1 EUR = {eur_usd:.3f} USD\n"
-        "\n"
+        f"🇪🇺 1 EUR = {eur_usd:.3f} USD\n\n"
+
         "━━━━━━━━━━━━━━━━━━\n"
-        f"{countdown}\n"
-        "\n"
-        "🤲 ذكر وتذكير:\n"
-        f"«{dhikr}»\n"
+
+        f"{get_ramadan_countdown()}\n\n"
+
+        "🤲 ذكر اليوم:\n"
+        f"{dhikr}\n\n"
+
         "━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "By LEX"
+
+        f"🕒 {now.strftime('%Y-%m-%d | %H:%M')}\n"
+        "⚡ By LEX"
     )
 
+    return message
 
-# ============================================================
-# TELEGRAM SEND
-# ============================================================
 
-async def send_safe(context, chat_id, message):
+# ==========================================
+# إرسال آمن إلى Telegram
+# ==========================================
 
-    for attempt in range(1, 4):
+async def send_safe(bot, chat_id, message):
+
+    for attempt in range(3):
 
         try:
 
-            await context.bot.send_message(
+            await bot.send_message(
                 chat_id=chat_id,
                 text=message,
+                disable_web_page_preview=True,
             )
 
-            logger.info("✅ Telegram message sent")
-
+            logger.info("Message sent successfully")
             return True
 
-        except RetryAfter as e:
+        except Exception as error:
 
-            logger.warning(
-                "Telegram rate limit: %s sec",
-                e.retry_after,
+            logger.error(
+                "Telegram send attempt %s failed: %s",
+                attempt + 1,
+                error,
             )
 
-            await asyncio.sleep(
-                e.retry_after
-            )
-
-        except (
-            TimedOut,
-            NetworkError,
-        ) as e:
-
-            logger.warning(
-                "Telegram network error %s/3: %s",
-                attempt,
-                e,
-            )
-
-            if attempt < 3:
-
-                await asyncio.sleep(attempt * 3)
-
-        except Conflict:
-
-            logger.critical("🚨 409 CONFLICT")
-
-            logger.critical(
-                "Another instance is using BOT_TOKEN."
-            )
-
-            return False
-
-        except Exception as e:
-
-            logger.exception(
-                "Telegram send error: %s",
-                e,
-            )
-
-            return False
+            if attempt < 2:
+                await asyncio.sleep(3 * (attempt + 1))
 
     return False
 
 
-# ============================================================
-# AUTOMATIC UPDATE
-# ============================================================
+# ==========================================
+# تحديث الأسعار في المجموعة
+# ==========================================
 
-async def send_price(
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    logger.info("========== FX UPDATE ==========")
+async def update_rates(context: ContextTypes.DEFAULT_TYPE):
 
     try:
 
-        usd_eur, eur_usd = await get_verified_rate()
+        message = await make_message()
 
-        message = make_message(
-            usd_eur,
-            eur_usd,
-        )
-
-        sent = await send_safe(
-            context,
+        await send_safe(
+            context.bot,
             GROUP_ID,
             message,
         )
 
-        if sent:
+    except Exception as error:
 
-            logger.info("✅ VERIFIED PRICE SENT")
-
-        else:
-
-            logger.error("❌ TELEGRAM MESSAGE NOT SENT")
-
-    except Exception as e:
-
-        logger.error(
-            "❌ PRICE NOT SENT: %s",
-            e,
-        )
-
-    logger.info("================================")
+        logger.exception("Update failed: %s", error)
 
 
-# ============================================================
-# /START
-# ============================================================
+# ==========================================
+# أمر /start
+# ==========================================
 
-async def start(
+async def start_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await update.message.reply_text(
-        "🤖 LEX FX BOT V5 خدام\n"
-        "\n"
-        "💱 USD / EUR\n"
-        "📊 Double Verified Forex Rate\n"
-        "🌙 Ramadan Countdown\n"
-        "🤲 Islamic Adhkar\n"
-        "🇩🇿 Algeria Timezone\n"
-        "⏰ تحديث كل 3 ساعات\n"
-        "\n"
-        "By LEX"
+        "👋 مرحباً بك في LEX Rate Bot\n\n"
+        "💱 للحصول على أسعار العملات:\n"
+        "/price\n\n"
+        "⚡ By LEX"
     )
 
 
-# ============================================================
-# /PRICE
-# ============================================================
+# ==========================================
+# أمر /price
+# ==========================================
 
-async def price(
+async def price_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
     try:
 
-        usd_eur, eur_usd = await get_verified_rate()
+        message = await make_message()
+
+        await update.message.reply_text(message)
+
+    except Exception as error:
+
+        logger.error("Price command error: %s", error)
 
         await update.message.reply_text(
-            make_message(
-                usd_eur,
-                eur_usd,
-            )
-        )
-
-    except Exception as e:
-
-        logger.error(
-            "/price failed: %s",
-            e,
-        )
-
-        await update.message.reply_text(
-            "❌ السعر غير متوفر حاليا.\n"
-            "المصدران لم يعطيا سعراً متوافقاً."
+            "⚠️ تعذر الحصول على الأسعار حالياً، حاول لاحقاً."
         )
 
 
-# ============================================================
-# ERROR HANDLER
-# ============================================================
+# ==========================================
+# معالجة الأخطاء
+# ==========================================
 
 async def error_handler(
-    update,
+    update: object,
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
-    error = context.error
-
-    if isinstance(error, Conflict):
-
-        logger.critical("🚨 TELEGRAM 409 CONFLICT")
-
-        logger.critical(
-            "Only ONE instance can use BOT_TOKEN."
-        )
-
-        return
-
     logger.exception(
-        "Telegram application error: %s",
-        error,
+        "Telegram application error:",
+        exc_info=context.error,
     )
 
 
-# ============================================================
-# MAIN
-# ============================================================
+# ==========================================
+# تشغيل البوت
+# ==========================================
 
 def main():
 
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN missing")
+        raise ValueError("BOT_TOKEN is missing")
 
     if not GROUP_ID:
-        raise RuntimeError("GROUP_ID missing")
+        raise ValueError("GROUP_ID is missing")
 
     if not TWELVE_DATA_API_KEY:
-        raise RuntimeError("TWELVE_DATA_API_KEY missing")
+        raise ValueError("TWELVE_DATA_API_KEY is missing")
 
-    logger.info("======================================")
-    logger.info("🚀 LEX PRO FX BOT V5")
-    logger.info("1️⃣ Twelve Data")
-    logger.info("2️⃣ ExchangeRate.dev")
-    logger.info("🔐 Double verification enabled")
-    logger.info("🌙 Ramadan Countdown enabled")
-    logger.info("🤲 Adhkar variety enabled")
-    logger.info("🇩🇿 Africa/Algiers timezone")
-    logger.info("💱 3 decimal places")
-    logger.info("⏰ Update every 3 HOURS")
-    logger.info("======================================")
-
-    app = (
+    application = (
         Application.builder()
         .token(BOT_TOKEN)
-        .connect_timeout(10)
-        .read_timeout(30)
-        .write_timeout(30)
-        .pool_timeout(10)
         .build()
     )
 
-    app.add_handler(
-        CommandHandler("start", start)
+    application.add_handler(
+        CommandHandler("start", start_command)
     )
 
-    app.add_handler(
-        CommandHandler("price", price)
+    application.add_handler(
+        CommandHandler("price", price_command)
     )
 
-    app.add_error_handler(error_handler)
+    application.add_error_handler(error_handler)
 
-    app.job_queue.run_repeating(
-        send_price,
+    # تحديث أول بعد 10 ثوانٍ
+    # ثم كل 3 ساعات
+    application.job_queue.run_repeating(
+        update_rates,
         interval=UPDATE_INTERVAL,
-        first=FIRST_UPDATE,
+        first=10,
+        name="LEX_RATE_UPDATE",
     )
 
-    logger.info("✅ Bot initialized")
-    logger.info("⏰ Automatic update every 3 hours")
-    logger.info("▶️ Telegram polling started")
+    logger.info("LEX Rate Bot V6 started")
 
-    app.run_polling(
+    application.run_polling(
         drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
     )
 
-
-# ============================================================
-# RUN
-# ============================================================
 
 if __name__ == "__main__":
     main()
