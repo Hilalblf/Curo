@@ -2,6 +2,8 @@
 import os
 import asyncio
 import logging
+import random
+
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -23,30 +25,25 @@ from telegram.ext import (
 
 
 # ============================================================
-# CONFIG
+# CONFIG — LEX FX BOT V5
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 
-# تحديث كل 3 ساعات
-UPDATE_INTERVAL = 3 * 60 * 60
+TIMEZONE = ZoneInfo("Africa/Algiers")
 
-# أول تحديث بعد 10 ثواني
-FIRST_UPDATE = 10
-
-# أقصى فرق مسموح بين المصدرين
-MAX_SOURCE_DIFFERENCE = Decimal("0.005")
-
-# توقيت رومانيا
-TIMEZONE = ZoneInfo("Europe/Bucharest")
-
-# تاريخ رمضان المتوقع - قابل للتعديل من Railway
+# التاريخ المتوقع لبداية رمضان 2027
 RAMADAN_DATE = os.getenv(
     "RAMADAN_DATE",
     "2027-02-08"
 )
+
+UPDATE_INTERVAL = 3 * 60 * 60
+FIRST_UPDATE = 10
+
+MAX_SOURCE_DIFFERENCE = Decimal("0.005")
 
 
 # ============================================================
@@ -68,16 +65,17 @@ logger = logging.getLogger("LEX")
 session = requests.Session()
 
 session.headers.update({
-    "User-Agent": "LEX-FX-Bot/3.0",
+    "User-Agent": "LEX-FX-Bot/5.0",
     "Accept": "application/json",
 })
 
 
 # ============================================================
-# ADHKAR
+# ADHKAR DATABASE
 # ============================================================
 
 ADHKAR = [
+
     "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ، سُبْحَانَ اللَّهِ الْعَظِيمِ.",
 
     "أَسْتَغْفِرُ اللَّهَ وَأَتُوبُ إِلَيْهِ.",
@@ -94,24 +92,74 @@ ADHKAR = [
 
     "الْحَمْدُ لِلَّهِ عَلَى كُلِّ حَالٍ.",
 
-    "لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ."
+    "لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ.",
+
+    "اللَّهُمَّ إِنَّكَ عَفُوٌّ تُحِبُّ الْعَفْوَ فَاعْفُ عَنِّي.",
+
+    "رَبِّ اغْفِرْ لِي وَلِوَالِدَيَّ وَلِلْمُؤْمِنِينَ.",
+
+    "اللَّهُمَّ ارْزُقْنَا حُسْنَ الْخَاتِمَةِ.",
+
+    "يَا رَبِّ، لَكَ الْحَمْدُ كَمَا يَنْبَغِي لِجَلَالِ وَجْهِكَ وَعَظِيمِ سُلْطَانِكَ.",
+
+    "اللَّهُمَّ اهْدِنَا وَاهْدِ بِنَا وَاجْعَلْنَا سَبَبًا لِمَنِ اهْتَدَى.",
+
+    "رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ.",
+
+    "اللَّهُمَّ أَصْلِحْ لَنَا دِينَنَا وَدُنْيَانَا وَآخِرَتَنَا.",
+
+    "اللَّهُمَّ إِنِّي أَسْأَلُكَ الْعَفْوَ وَالْعَافِيَةَ.",
+
+    "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ.",
+
+    "اللَّهُمَّ اجْعَلْنَا مِنَ الشَّاكِرِينَ وَالصَّابِرِينَ.",
+
+    "رَبِّ زِدْنِي عِلْمًا.",
+
+    "اللَّهُمَّ بَارِكْ لَنَا فِي أَرْزَاقِنَا وَأَعْمَارِنَا.",
+
+    "أَسْتَغْفِرُ اللَّهَ الْعَظِيمَ الَّذِي لَا إِلَهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ وَأَتُوبُ إِلَيْهِ.",
+
+    "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ.",
+
+    "اللَّهُمَّ اجْعَلْنَا مِنْ أَهْلِ الْجَنَّةِ.",
+
+    "يَا مُقَلِّبَ الْقُلُوبِ ثَبِّتْ قَلْبِي عَلَى دِينِكَ.",
+
+    "اللَّهُمَّ أَعِنَّا عَلَى ذِكْرِكَ وَشُكْرِكَ وَحُسْنِ عِبَادَتِكَ.",
+
+    "رَبَّنَا لَا تُزِغْ قُلُوبَنَا بَعْدَ إِذْ هَدَيْتَنَا.",
+
+    "اللَّهُمَّ ارْحَمْ وَالِدَيْنَا وَاغْفِرْ لَهُمَا.",
+
+    "الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ.",
+
+    "اللَّهُمَّ فَرِّجْ هُمُومَنَا وَيَسِّرْ أُمُورَنَا."
 ]
+
+
+# منع تكرار الذكر السابق
+last_dhikr = None
 
 
 def get_daily_dhikr():
 
-    now = datetime.now(TIMEZONE)
+    global last_dhikr
 
-    # يتغير الذكر كل 3 ساعات
-    slot = int(now.timestamp() // UPDATE_INTERVAL)
+    choices = [
+        item for item in ADHKAR
+        if item != last_dhikr
+    ]
 
-    index = slot % len(ADHKAR)
+    selected = random.choice(choices)
 
-    return ADHKAR[index]
+    last_dhikr = selected
+
+    return selected
 
 
 # ============================================================
-# RAMADAN COUNTDOWN
+# RAMADAN COUNTDOWN — ALGERIA
 # ============================================================
 
 def get_ramadan_countdown():
@@ -119,25 +167,50 @@ def get_ramadan_countdown():
     today = datetime.now(TIMEZONE).date()
 
     try:
+
         ramadan = date.fromisoformat(RAMADAN_DATE)
 
     except ValueError:
+
         logger.error("Invalid RAMADAN_DATE")
+
         ramadan = date(2027, 2, 8)
 
     remaining = (ramadan - today).days
 
     if remaining > 1:
-        return f"🌙 باقي على رمضان {remaining} يوماً"
+
+        countdown = (
+            f"🌙 باقي تقريباً {remaining} يوماً "
+            "على رمضان بإذن الله."
+        )
 
     elif remaining == 1:
-        return "🌙 باقي يوم واحد على رمضان"
+
+        countdown = (
+            "🌙 باقي تقريباً يوم واحد "
+            "على رمضان بإذن الله."
+        )
 
     elif remaining == 0:
-        return "🌙 اليوم أول رمضان، رمضان مبارك!"
+
+        countdown = (
+            "🌙 من المتوقع أن يكون اليوم بداية رمضان "
+            "بإذن الله."
+        )
 
     else:
-        return "🌙 نسأل الله أن يتقبل منا ومنكم صالح الأعمال."
+
+        countdown = (
+            "🌙 نسأل الله أن يتقبل منا ومنكم "
+            "صالح الأعمال."
+        )
+
+    return (
+        countdown
+        + "\n"
+        + "📌 التاريخ تقريبي ويخضع لرؤية الهلال والإعلان الرسمي."
+    )
 
 
 # ============================================================
@@ -166,6 +239,7 @@ def validate_rate(value):
         TypeError,
         ValueError,
     ):
+
         return None
 
 
@@ -176,7 +250,10 @@ def validate_rate(value):
 def get_twelve_data():
 
     if not TWELVE_DATA_API_KEY:
-        raise RuntimeError("TWELVE_DATA_API_KEY missing")
+
+        raise RuntimeError(
+            "TWELVE_DATA_API_KEY missing"
+        )
 
     url = "https://api.twelvedata.com/price"
 
@@ -198,6 +275,7 @@ def get_twelve_data():
     data = response.json()
 
     if data.get("status") == "error":
+
         raise RuntimeError(
             data.get("message", "Twelve Data error")
         )
@@ -205,6 +283,7 @@ def get_twelve_data():
     price = data.get("price")
 
     if price is None:
+
         raise RuntimeError(
             f"Twelve Data price missing: {data}"
         )
@@ -212,6 +291,7 @@ def get_twelve_data():
     eur_usd = validate_rate(price)
 
     if eur_usd is None:
+
         raise RuntimeError(
             f"Invalid EUR/USD: {price}"
         )
@@ -223,11 +303,6 @@ def get_twelve_data():
         eur_usd,
     )
 
-    logger.info(
-        "✅ Twelve Data USD/EUR = %.8f",
-        usd_eur,
-    )
-
     return usd_eur
 
 
@@ -237,7 +312,10 @@ def get_twelve_data():
 
 def get_exchangerate_dev():
 
-    url = "https://api.exchangerate.dev/v1/latest/USD"
+    url = (
+        "https://api.exchangerate.dev/"
+        "v1/latest/USD"
+    )
 
     params = {
         "symbols": "EUR",
@@ -256,6 +334,7 @@ def get_exchangerate_dev():
     data = response.json()
 
     if data.get("result") != "success":
+
         raise RuntimeError(
             f"ExchangeRate.dev error: {data}"
         )
@@ -263,6 +342,7 @@ def get_exchangerate_dev():
     rates = data.get("rates")
 
     if not isinstance(rates, dict):
+
         raise RuntimeError(
             "ExchangeRate.dev rates missing"
         )
@@ -272,6 +352,7 @@ def get_exchangerate_dev():
     usd_eur = validate_rate(value)
 
     if usd_eur is None:
+
         raise RuntimeError(
             f"Invalid ExchangeRate.dev USD/EUR: {value}"
         )
@@ -335,11 +416,6 @@ def get_verified_rate_sync():
         usd_eur,
     )
 
-    logger.info(
-        "🎯 VERIFIED EUR/USD = %.8f",
-        eur_usd,
-    )
-
     return usd_eur, eur_usd
 
 
@@ -373,6 +449,7 @@ async def get_verified_rate():
             )
 
             if attempt < 3:
+
                 await asyncio.sleep(
                     delays[attempt - 1]
                 )
@@ -393,13 +470,13 @@ def make_message(usd_eur, eur_usd):
     dhikr = get_daily_dhikr()
 
     return (
-        f"🇺🇸 1 USD = {usd_eur:.6f} EUR\n"
-        f"🇪🇺 1 EUR = {eur_usd:.6f} USD\n"
+        f"🇺🇸 1 USD = {usd_eur:.3f} EUR\n"
+        f"🇪🇺 1 EUR = {eur_usd:.3f} USD\n"
         "\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"{countdown}\n"
         "\n"
-        "🤲 ذكر اليوم:\n"
+        "🤲 ذكر وتذكير:\n"
         f"«{dhikr}»\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "\n"
@@ -449,6 +526,7 @@ async def send_safe(context, chat_id, message):
             )
 
             if attempt < 3:
+
                 await asyncio.sleep(attempt * 3)
 
         except Conflict:
@@ -477,7 +555,9 @@ async def send_safe(context, chat_id, message):
 # AUTOMATIC UPDATE
 # ============================================================
 
-async def send_price(context: ContextTypes.DEFAULT_TYPE):
+async def send_price(
+    context: ContextTypes.DEFAULT_TYPE,
+):
 
     logger.info("========== FX UPDATE ==========")
 
@@ -497,8 +577,11 @@ async def send_price(context: ContextTypes.DEFAULT_TYPE):
         )
 
         if sent:
+
             logger.info("✅ VERIFIED PRICE SENT")
+
         else:
+
             logger.error("❌ TELEGRAM MESSAGE NOT SENT")
 
     except Exception as e:
@@ -521,12 +604,13 @@ async def start(
 ):
 
     await update.message.reply_text(
-        "🤖 LEX FX BOT V3 خدام\n"
+        "🤖 LEX FX BOT V5 خدام\n"
         "\n"
         "💱 USD / EUR\n"
         "📊 Double Verified Forex Rate\n"
         "🌙 Ramadan Countdown\n"
-        "🤲 Daily Islamic Adhkar\n"
+        "🤲 Islamic Adhkar\n"
+        "🇩🇿 Algeria Timezone\n"
         "⏰ تحديث كل 3 ساعات\n"
         "\n"
         "By LEX"
@@ -609,12 +693,14 @@ def main():
         raise RuntimeError("TWELVE_DATA_API_KEY missing")
 
     logger.info("======================================")
-    logger.info("🚀 LEX PRO FX BOT V3")
+    logger.info("🚀 LEX PRO FX BOT V5")
     logger.info("1️⃣ Twelve Data")
     logger.info("2️⃣ ExchangeRate.dev")
     logger.info("🔐 Double verification enabled")
     logger.info("🌙 Ramadan Countdown enabled")
-    logger.info("🤲 Daily Adhkar enabled")
+    logger.info("🤲 Adhkar variety enabled")
+    logger.info("🇩🇿 Africa/Algiers timezone")
+    logger.info("💱 3 decimal places")
     logger.info("⏰ Update every 3 HOURS")
     logger.info("======================================")
 
@@ -638,7 +724,6 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    # تحديث كل 3 ساعات
     app.job_queue.run_repeating(
         send_price,
         interval=UPDATE_INTERVAL,
@@ -661,3 +746,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ 
