@@ -4,7 +4,7 @@ import asyncio
 import random
 import logging
 from datetime import datetime, date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import requests
@@ -16,19 +16,20 @@ from telegram.ext import (
 )
 
 # ==========================================
-# LEX RATE BOT - V6
+# LEX RATE BOT - V7 XE PRIORITY
 # ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
+
+XE_API_KEY = os.getenv("XE_API_KEY")
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 
 TIMEZONE = ZoneInfo("Africa/Algiers")
 
-# تاريخ رمضان المتوقع، يمكن تغييره من Railway Variables
 RAMADAN_DATE = os.getenv("RAMADAN_DATE", "2027-02-08")
 
-# أقصى فرق مسموح بين المصدرين: 0.50%
+# أقصى اختلاف مسموح بين المصدرين الاحتياطيين
 MAX_SOURCE_DIFFERENCE = Decimal("0.005")
 
 UPDATE_INTERVAL = 3 * 60 * 60
@@ -84,7 +85,10 @@ ADHKAR = [
 def get_daily_dhikr():
     global last_dhikr
 
-    choices = [item for item in ADHKAR if item != last_dhikr]
+    choices = [
+        item for item in ADHKAR
+        if item != last_dhikr
+    ]
 
     selected = random.choice(choices)
     last_dhikr = selected
@@ -113,15 +117,82 @@ def get_ramadan_countdown():
     elif remaining == 0:
         return "🌙 رمضان اليوم بإذن الله"
 
-    else:
-        return "🌙 نسأل الله أن يتقبل منا ومنكم صالح الأعمال."
+    return "🌙 نسأل الله أن يتقبل منا ومنكم صالح الأعمال."
 
 
 # ==========================================
-# المصدر الأول: Twelve Data
+# SOURCE 1: XE (PRIMARY)
+# ==========================================
+
+def get_xe_rate():
+
+    if not XE_API_KEY:
+        raise ValueError("XE_API_KEY is missing")
+
+    url = "https://xecdapi.xe.com/v1/convert_from.json/"
+
+    headers = {
+        "Authorization": f"Bearer {XE_API_KEY}",
+        "Accept": "application/json",
+    }
+
+    params = {
+        "from": "USD",
+        "to": "EUR",
+        "amount": 1,
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=20,
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    # استخراج سعر USD إلى EUR
+    rates = data.get("to", [])
+
+    if isinstance(rates, dict):
+        eur_rate = rates.get("EUR")
+    else:
+        eur_rate = next(
+            (
+                item.get("mid")
+                for item in rates
+                if item.get("quotecurrency") == "EUR"
+            ),
+            None,
+        )
+
+    if eur_rate is None:
+        raise ValueError(f"XE returned no EUR rate: {data}")
+
+    usd_eur = Decimal(str(eur_rate))
+
+    if not usd_eur.is_finite() or usd_eur <= 0:
+        raise ValueError("Invalid XE rate")
+
+    logger.info(
+        "PRIMARY SOURCE: XE | USD/EUR: %s | Timestamp: %s",
+        usd_eur,
+        data.get("timestamp", "unknown"),
+    )
+
+    return usd_eur
+
+
+# ==========================================
+# SOURCE 2: TWELVE DATA (BACKUP 1)
 # ==========================================
 
 def get_twelve_data_rate():
+
+    if not TWELVE_DATA_API_KEY:
+        raise ValueError("TWELVE_DATA_API_KEY is missing")
 
     url = "https://api.twelvedata.com/exchange_rate"
 
@@ -145,17 +216,15 @@ def get_twelve_data_rate():
 
     eur_usd = Decimal(str(data["rate"]))
 
-    if eur_usd <= 0:
+    if not eur_usd.is_finite() or eur_usd <= 0:
         raise ValueError("Invalid Twelve Data rate")
 
     # تحويل EUR/USD إلى USD/EUR
-    usd_eur = Decimal("1") / eur_usd
-
-    return usd_eur
+    return Decimal("1") / eur_usd
 
 
 # ==========================================
-# المصدر الثاني: ExchangeRate-API
+# SOURCE 3: EXCHANGERATE-API (BACKUP 2)
 # ==========================================
 
 def get_second_source_rate():
@@ -178,17 +247,17 @@ def get_second_source_rate():
 
     rate = Decimal(str(eur_rate))
 
-    if rate <= 0:
+    if not rate.is_finite() or rate <= 0:
         raise ValueError("Invalid second source rate")
 
     return rate
 
 
 # ==========================================
-# مقارنة المصدرين
+# BACKUP VALIDATION
 # ==========================================
 
-def fetch_rates_once():
+def get_backup_rate():
 
     rate_one = get_twelve_data_rate()
     rate_two = get_second_source_rate()
@@ -200,29 +269,74 @@ def fetch_rates_once():
     relative_difference = difference / average
 
     logger.info(
-        "Source 1: %s | Source 2: %s | Difference: %s",
+        "BACKUP 1: Twelve Data: %s | "
+        "BACKUP 2: ExchangeRate-API: %s | "
+        "Difference: %.6f%%",
         rate_one,
         rate_two,
-        relative_difference,
+        relative_difference * Decimal("100"),
     )
 
     if relative_difference > MAX_SOURCE_DIFFERENCE:
         raise ValueError(
-            "Source difference is too high. "
+            "Backup source difference is too high. "
             "Publishing cancelled."
         )
 
-    # متوسط المصدرين
+    # استخدام متوسط المصدرين الاحتياطيين
     usd_eur = average
 
-    # السعر العكسي
+    logger.warning(
+        "BACKUP MODE ACTIVE | USD/EUR: %s",
+        usd_eur,
+    )
+
+    return usd_eur
+
+
+# ==========================================
+# FETCH RATES - XE FIRST
+# ==========================================
+
+def fetch_rates_once():
+
+    try:
+
+        # الأولوية دائماً لـ XE
+        usd_eur = get_xe_rate()
+
+        source = "XE"
+
+    except Exception as xe_error:
+
+        logger.error(
+            "XE primary source failed: %s",
+            xe_error,
+        )
+
+        logger.warning(
+            "Trying validated backup sources..."
+        )
+
+        # لا نستخدم الاحتياطي إلا بعد التحقق
+        usd_eur = get_backup_rate()
+
+        source = "BACKUP"
+
     eur_usd = Decimal("1") / usd_eur
+
+    logger.info(
+        "FINAL RATE | Source: %s | USD/EUR: %s | EUR/USD: %s",
+        source,
+        usd_eur,
+        eur_usd,
+    )
 
     return usd_eur, eur_usd
 
 
 # ==========================================
-# إعادة المحاولة
+# RETRY SYSTEM
 # ==========================================
 
 async def get_rates():
@@ -232,7 +346,10 @@ async def get_rates():
     for attempt, delay in enumerate(delays, start=1):
 
         try:
-            return await asyncio.to_thread(fetch_rates_once)
+
+            return await asyncio.to_thread(
+                fetch_rates_once
+            )
 
         except Exception as error:
 
@@ -249,7 +366,7 @@ async def get_rates():
 
 
 # ==========================================
-# إنشاء الرسالة
+# CREATE MESSAGE
 # ==========================================
 
 async def make_message():
@@ -284,7 +401,7 @@ async def make_message():
 
 
 # ==========================================
-# إرسال آمن إلى Telegram
+# SAFE TELEGRAM SENDING
 # ==========================================
 
 async def send_safe(bot, chat_id, message):
@@ -317,7 +434,7 @@ async def send_safe(bot, chat_id, message):
 
 
 # ==========================================
-# تحديث الأسعار في المجموعة
+# AUTOMATIC UPDATE
 # ==========================================
 
 async def update_rates(context: ContextTypes.DEFAULT_TYPE):
@@ -334,11 +451,14 @@ async def update_rates(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as error:
 
-        logger.exception("Update failed: %s", error)
+        logger.exception(
+            "Update failed: %s",
+            error,
+        )
 
 
 # ==========================================
-# أمر /start
+# /START
 # ==========================================
 
 async def start_command(
@@ -355,7 +475,7 @@ async def start_command(
 
 
 # ==========================================
-# أمر /price
+# /PRICE
 # ==========================================
 
 async def price_command(
@@ -371,7 +491,10 @@ async def price_command(
 
     except Exception as error:
 
-        logger.error("Price command error: %s", error)
+        logger.error(
+            "Price command error: %s",
+            error,
+        )
 
         await update.message.reply_text(
             "⚠️ تعذر الحصول على الأسعار حالياً، حاول لاحقاً."
@@ -379,7 +502,7 @@ async def price_command(
 
 
 # ==========================================
-# معالجة الأخطاء
+# ERROR HANDLER
 # ==========================================
 
 async def error_handler(
@@ -394,7 +517,7 @@ async def error_handler(
 
 
 # ==========================================
-# تشغيل البوت
+# MAIN
 # ==========================================
 
 def main():
@@ -405,8 +528,8 @@ def main():
     if not GROUP_ID:
         raise ValueError("GROUP_ID is missing")
 
-    if not TWELVE_DATA_API_KEY:
-        raise ValueError("TWELVE_DATA_API_KEY is missing")
+    if not XE_API_KEY:
+        raise ValueError("XE_API_KEY is missing")
 
     application = (
         Application.builder()
@@ -433,7 +556,9 @@ def main():
         name="LEX_RATE_UPDATE",
     )
 
-    logger.info("LEX Rate Bot V6 started")
+    logger.info(
+        "LEX RATE BOT V7 started | Primary: XE"
+    )
 
     application.run_polling(
         drop_pending_updates=True,
@@ -442,4 +567,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 
