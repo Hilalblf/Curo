@@ -16,20 +16,24 @@ from telegram.ext import (
 )
 
 # ==========================================
-# LEX RATE BOT - V7 XE PRIORITY
+# LEX RATE BOT - V7
+# XE FALLBACK SYSTEM
 # ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
 
-XE_API_KEY = os.getenv("XE_API_KEY")
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
+XE_API_KEY = os.getenv("XE_API_KEY")
 
 TIMEZONE = ZoneInfo("Africa/Algiers")
 
-RAMADAN_DATE = os.getenv("RAMADAN_DATE", "2027-02-08")
+RAMADAN_DATE = os.getenv(
+    "RAMADAN_DATE",
+    "2027-02-08"
+)
 
-# أقصى اختلاف مسموح بين المصدرين الاحتياطيين
+# أقصى اختلاف مسموح: 0.50%
 MAX_SOURCE_DIFFERENCE = Decimal("0.005")
 
 UPDATE_INTERVAL = 3 * 60 * 60
@@ -83,6 +87,7 @@ ADHKAR = [
 
 
 def get_daily_dhikr():
+
     global last_dhikr
 
     choices = [
@@ -91,6 +96,7 @@ def get_daily_dhikr():
     ]
 
     selected = random.choice(choices)
+
     last_dhikr = selected
 
     return selected
@@ -106,6 +112,7 @@ def get_ramadan_countdown():
 
     try:
         ramadan = date.fromisoformat(RAMADAN_DATE)
+
     except ValueError:
         ramadan = date(2027, 2, 8)
 
@@ -121,72 +128,7 @@ def get_ramadan_countdown():
 
 
 # ==========================================
-# SOURCE 1: XE (PRIMARY)
-# ==========================================
-
-def get_xe_rate():
-
-    if not XE_API_KEY:
-        raise ValueError("XE_API_KEY is missing")
-
-    url = "https://xecdapi.xe.com/v1/convert_from.json/"
-
-    headers = {
-        "Authorization": f"Bearer {XE_API_KEY}",
-        "Accept": "application/json",
-    }
-
-    params = {
-        "from": "USD",
-        "to": "EUR",
-        "amount": 1,
-    }
-
-    response = requests.get(
-        url,
-        headers=headers,
-        params=params,
-        timeout=20,
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    # استخراج سعر USD إلى EUR
-    rates = data.get("to", [])
-
-    if isinstance(rates, dict):
-        eur_rate = rates.get("EUR")
-    else:
-        eur_rate = next(
-            (
-                item.get("mid")
-                for item in rates
-                if item.get("quotecurrency") == "EUR"
-            ),
-            None,
-        )
-
-    if eur_rate is None:
-        raise ValueError(f"XE returned no EUR rate: {data}")
-
-    usd_eur = Decimal(str(eur_rate))
-
-    if not usd_eur.is_finite() or usd_eur <= 0:
-        raise ValueError("Invalid XE rate")
-
-    logger.info(
-        "PRIMARY SOURCE: XE | USD/EUR: %s | Timestamp: %s",
-        usd_eur,
-        data.get("timestamp", "unknown"),
-    )
-
-    return usd_eur
-
-
-# ==========================================
-# SOURCE 2: TWELVE DATA (BACKUP 1)
+# SOURCE 1: TWELVE DATA
 # ==========================================
 
 def get_twelve_data_rate():
@@ -220,11 +162,13 @@ def get_twelve_data_rate():
         raise ValueError("Invalid Twelve Data rate")
 
     # تحويل EUR/USD إلى USD/EUR
-    return Decimal("1") / eur_usd
+    usd_eur = Decimal("1") / eur_usd
+
+    return usd_eur
 
 
 # ==========================================
-# SOURCE 3: EXCHANGERATE-API (BACKUP 2)
+# SOURCE 2: EXCHANGERATE-API
 # ==========================================
 
 def get_second_source_rate():
@@ -254,79 +198,189 @@ def get_second_source_rate():
 
 
 # ==========================================
-# BACKUP VALIDATION
+# SOURCE 3: XE FALLBACK
 # ==========================================
 
-def get_backup_rate():
+def get_xe_rate():
 
-    rate_one = get_twelve_data_rate()
-    rate_two = get_second_source_rate()
+    if not XE_API_KEY:
+        raise ValueError("XE_API_KEY is not configured")
 
-    difference = abs(rate_one - rate_two)
+    url = "https://xecdapi.xe.com/v1/convert_from.json/"
 
-    average = (rate_one + rate_two) / Decimal("2")
+    headers = {
+        "Authorization": f"Bearer {XE_API_KEY}",
+        "Accept": "application/json",
+    }
 
-    relative_difference = difference / average
+    params = {
+        "from": "USD",
+        "to": "EUR",
+        "amount": 1,
+    }
 
-    logger.info(
-        "BACKUP 1: Twelve Data: %s | "
-        "BACKUP 2: ExchangeRate-API: %s | "
-        "Difference: %.6f%%",
-        rate_one,
-        rate_two,
-        relative_difference * Decimal("100"),
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=20,
     )
 
-    if relative_difference > MAX_SOURCE_DIFFERENCE:
-        raise ValueError(
-            "Backup source difference is too high. "
-            "Publishing cancelled."
-        )
+    response.raise_for_status()
 
-    # استخدام متوسط المصدرين الاحتياطيين
-    usd_eur = average
+    data = response.json()
 
-    logger.warning(
-        "BACKUP MODE ACTIVE | USD/EUR: %s",
-        usd_eur,
+    eur_rate = next(
+        (
+            item.get("mid")
+            for item in data.get("to", [])
+            if item.get("quotecurrency") == "EUR"
+        ),
+        None,
     )
 
-    return usd_eur
+    if eur_rate is None:
+        raise ValueError("XE returned no EUR rate")
+
+    rate = Decimal(str(eur_rate))
+
+    if not rate.is_finite() or rate <= 0:
+        raise ValueError("Invalid XE rate")
+
+    logger.info("XE RATE: %s", rate)
+
+    return rate
 
 
 # ==========================================
-# FETCH RATES - XE FIRST
+# PRICE SYSTEM
 # ==========================================
 
 def fetch_rates_once():
 
+    rate_one = None
+    rate_two = None
+
+    # جلب المصدر الأول
     try:
 
-        # الأولوية دائماً لـ XE
-        usd_eur = get_xe_rate()
+        rate_one = get_twelve_data_rate()
 
-        source = "XE"
+        logger.info(
+            "Twelve Data rate: %s",
+            rate_one,
+        )
 
-    except Exception as xe_error:
+    except Exception as error:
 
         logger.error(
-            "XE primary source failed: %s",
-            xe_error,
+            "Twelve Data failed: %s",
+            error,
         )
 
-        logger.warning(
-            "Trying validated backup sources..."
+    # جلب المصدر الثاني
+    try:
+
+        rate_two = get_second_source_rate()
+
+        logger.info(
+            "ExchangeRate-API rate: %s",
+            rate_two,
         )
 
-        # لا نستخدم الاحتياطي إلا بعد التحقق
-        usd_eur = get_backup_rate()
+    except Exception as error:
 
-        source = "BACKUP"
+        logger.error(
+            "ExchangeRate-API failed: %s",
+            error,
+        )
 
+    # ======================================
+    # المصدران يعملان
+    # ======================================
+
+    if rate_one is not None and rate_two is not None:
+
+        difference = abs(rate_one - rate_two)
+
+        average = (
+            rate_one + rate_two
+        ) / Decimal("2")
+
+        relative_difference = difference / average
+
+        logger.info(
+            "Source difference: %.6f%%",
+            relative_difference * Decimal("100"),
+        )
+
+        # إذا كان الاختلاف كبيراً
+        if relative_difference > MAX_SOURCE_DIFFERENCE:
+
+            logger.warning(
+                "PRICE MISMATCH DETECTED - Trying XE"
+            )
+
+            try:
+
+                usd_eur = get_xe_rate()
+
+                source = "XE"
+
+            except Exception as error:
+
+                logger.error(
+                    "XE unavailable: %s",
+                    error,
+                )
+
+                # لا نوقف البوت
+                usd_eur = rate_one
+
+                source = "Twelve Data Fallback"
+
+        else:
+
+            # السعران متوافقان
+            usd_eur = average
+
+            source = "Twelve Data + ExchangeRate-API"
+
+    # ======================================
+    # المصدر الأول فقط يعمل
+    # ======================================
+
+    elif rate_one is not None:
+
+        usd_eur = rate_one
+
+        source = "Twelve Data Only"
+
+    # ======================================
+    # المصدر الثاني فقط يعمل
+    # ======================================
+
+    elif rate_two is not None:
+
+        usd_eur = rate_two
+
+        source = "ExchangeRate-API Only"
+
+    # ======================================
+    # جميع المصادر متوقفة
+    # ======================================
+
+    else:
+
+        raise RuntimeError(
+            "All exchange rate sources are unavailable"
+        )
+
+    # حساب السعر العكسي
     eur_usd = Decimal("1") / usd_eur
 
     logger.info(
-        "FINAL RATE | Source: %s | USD/EUR: %s | EUR/USD: %s",
+        "FINAL PRICE | Source: %s | USD/EUR: %s | EUR/USD: %s",
         source,
         usd_eur,
         eur_usd,
@@ -417,6 +471,7 @@ async def send_safe(bot, chat_id, message):
             )
 
             logger.info("Message sent successfully")
+
             return True
 
         except Exception as error:
@@ -428,7 +483,9 @@ async def send_safe(bot, chat_id, message):
             )
 
             if attempt < 2:
-                await asyncio.sleep(3 * (attempt + 1))
+                await asyncio.sleep(
+                    3 * (attempt + 1)
+                )
 
     return False
 
@@ -437,7 +494,9 @@ async def send_safe(bot, chat_id, message):
 # AUTOMATIC UPDATE
 # ==========================================
 
-async def update_rates(context: ContextTypes.DEFAULT_TYPE):
+async def update_rates(
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     try:
 
@@ -487,7 +546,9 @@ async def price_command(
 
         message = await make_message()
 
-        await update.message.reply_text(message)
+        await update.message.reply_text(
+            message
+        )
 
     except Exception as error:
 
@@ -528,8 +589,8 @@ def main():
     if not GROUP_ID:
         raise ValueError("GROUP_ID is missing")
 
-    if not XE_API_KEY:
-        raise ValueError("XE_API_KEY is missing")
+    if not TWELVE_DATA_API_KEY:
+        raise ValueError("TWELVE_DATA_API_KEY is missing")
 
     application = (
         Application.builder()
@@ -545,10 +606,13 @@ def main():
         CommandHandler("price", price_command)
     )
 
-    application.add_error_handler(error_handler)
+    application.add_error_handler(
+        error_handler
+    )
 
-    # تحديث أول بعد 10 ثوانٍ
+    # أول تحديث بعد 10 ثوانٍ
     # ثم كل 3 ساعات
+
     application.job_queue.run_repeating(
         update_rates,
         interval=UPDATE_INTERVAL,
@@ -557,7 +621,7 @@ def main():
     )
 
     logger.info(
-        "LEX RATE BOT V7 started | Primary: XE"
+        "LEX Rate Bot V7 started successfully"
     )
 
     application.run_polling(
@@ -567,3 +631,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ 
